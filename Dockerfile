@@ -2,17 +2,15 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# Instalar dependencias del sistema requeridas para psycopg2 y compilación
-RUN apt-get update && apt-get install -y \
-    gcc \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
-
+# Copiar requerimientos e instalar dependencias
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+# Copiar el código fuente
+COPY main.py .
 
+# Exponer el puerto por defecto
 EXPOSE 8080
 
-CMD ["python", "main.py"]
+# Comando único de ejecución
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "main:app"]
