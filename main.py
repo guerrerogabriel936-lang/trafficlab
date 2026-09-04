@@ -1,353 +1,887 @@
-```python
 import os
-import time
-import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
 from flask import Flask, jsonify, request, render_template_string
 
 app = Flask(__name__)
 
-# ============================================================
-# CONFIGURACIÓN
-# ============================================================
+PORT = int(os.environ.get("PORT", 8080))
 
-MAX_OPERACIONES = 100_000
-MAX_CONCURRENCIA = 20
-
-estado = {
-    "ejecutando": False,
-    "total": 0,
-    "completadas": 0,
-    "exitosas": 0,
-    "fallidas": 0,
-    "inicio": None,
-    "fin": None,
-    "duracion": 0,
+# Estado temporal de la configuración
+configuracion = {
+    "titulo": "",
+    "dominio": "",
+    "fuente": "Directo",
+    "palabras_clave": [],
+    "sesiones_dia": 100,
+    "rebote": 20,
+    "aumento_automatico": False,
+    "aumento_semanal": 10,
+    "movil": 60,
+    "escritorio": 30,
+    "tablet": 10,
+    "paises": [],
+    "tiempo_pagina": 120,
+    "paginas_sesion": 3,
+    "urls_entrada": [],
+    "recorrido_automatico": True,
+    "programacion_inteligente": True,
+    "autorizado": False
 }
-
-lock = threading.Lock()
-
-
-# ============================================================
-# PÁGINA WEB
-# ============================================================
 
 HTML = """
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport"
-          content="width=device-width, initial-scale=1.0">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-    <title>TRAFFICLAB</title>
+<title>TrafficLab</title>
 
-    <style>
-        body {
-            margin: 0;
-            padding: 20px;
-            font-family: Arial, sans-serif;
-            background: #111;
-            color: white;
-        }
+<style>
 
-        .contenedor {
-            max-width: 700px;
-            margin: auto;
-        }
+* {
+    box-sizing: border-box;
+}
 
-        h1 {
-            text-align: center;
-            font-size: 36px;
-        }
+body {
+    margin: 0;
+    background: #080611;
+    color: #ffffff;
+    font-family: Arial, Helvetica, sans-serif;
+}
 
-        .tarjeta {
-            background: #1d1d1d;
-            border-radius: 15px;
-            padding: 20px;
-            margin-top: 20px;
-            box-shadow: 0 0 20px rgba(0,0,0,.25);
-        }
+.header {
+    padding: 20px;
+    border-bottom: 1px solid #29213b;
+    background: #0d0a18;
+}
 
-        input {
-            width: 100%;
-            box-sizing: border-box;
-            padding: 14px;
-            margin-top: 8px;
-            margin-bottom: 15px;
-            border-radius: 10px;
-            border: 1px solid #555;
-            background: #222;
-            color: white;
-            font-size: 16px;
-        }
+.logo {
+    font-size: 24px;
+    font-weight: bold;
+}
 
-        button {
-            width: 100%;
-            padding: 15px;
-            border: 0;
-            border-radius: 10px;
-            background: #fff;
-            color: #111;
-            font-size: 17px;
-            font-weight: bold;
-            cursor: pointer;
-        }
+.logo span {
+    color: #914cff;
+}
 
-        button:disabled {
-            opacity: .5;
-        }
+.container {
+    max-width: 1100px;
+    margin: auto;
+    padding: 20px;
+}
 
-        .barra {
-            width: 100%;
-            height: 25px;
-            background: #333;
-            border-radius: 20px;
-            overflow: hidden;
-            margin-top: 15px;
-        }
+.title {
+    margin-bottom: 25px;
+}
 
-        .progreso {
-            height: 100%;
-            width: 0%;
-            background: #fff;
-            transition: width .2s;
-        }
+.title h1 {
+    margin: 0;
+    font-size: 28px;
+}
 
-        .numero {
-            font-size: 28px;
-            font-weight: bold;
-            text-align: center;
-            margin-top: 15px;
-        }
+.title p {
+    color: #9992aa;
+}
 
-        .resultado {
-            line-height: 1.8;
-            font-size: 17px;
-        }
+.section {
+    background: #151120;
+    border: 1px solid #2b2340;
+    border-radius: 14px;
+    padding: 20px;
+    margin-bottom: 18px;
+}
 
-        .estado {
-            text-align: center;
-            margin-top: 15px;
-            font-weight: bold;
-        }
-    </style>
+.section h2 {
+    margin-top: 0;
+    font-size: 19px;
+}
+
+.section-description {
+    color: #9992aa;
+    font-size: 14px;
+    margin-bottom: 20px;
+}
+
+.grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 15px;
+}
+
+.field {
+    margin-bottom: 15px;
+}
+
+.field label {
+    display: block;
+    color: #bcb5ca;
+    font-size: 13px;
+    margin-bottom: 7px;
+}
+
+input,
+select,
+textarea {
+    width: 100%;
+    background: #211a31;
+    border: 1px solid #3a304d;
+    border-radius: 9px;
+    color: white;
+    padding: 12px;
+    outline: none;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+    border-color: #914cff;
+}
+
+textarea {
+    min-height: 100px;
+    resize: vertical;
+}
+
+.range-container {
+    background: #211a31;
+    padding: 15px;
+    border-radius: 10px;
+}
+
+input[type="range"] {
+    padding: 0;
+    accent-color: #914cff;
+}
+
+.range-value {
+    font-size: 22px;
+    font-weight: bold;
+    color: #a86aff;
+    margin-bottom: 8px;
+}
+
+.devices {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+}
+
+.device {
+    background: #211a31;
+    border: 1px solid #3a304d;
+    padding: 15px;
+    border-radius: 10px;
+}
+
+.device strong {
+    display: block;
+    margin-bottom: 8px;
+}
+
+.switch-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #211a31;
+    border-radius: 10px;
+    padding: 14px;
+    margin-bottom: 10px;
+}
+
+.switch {
+    position: relative;
+    width: 48px;
+    height: 26px;
+}
+
+.switch input {
+    display: none;
+}
+
+.slider-switch {
+    position: absolute;
+    inset: 0;
+    background: #393246;
+    border-radius: 30px;
+    cursor: pointer;
+}
+
+.slider-switch:before {
+    content: "";
+    position: absolute;
+    width: 20px;
+    height: 20px;
+    left: 3px;
+    top: 3px;
+    background: white;
+    border-radius: 50%;
+    transition: .2s;
+}
+
+.switch input:checked + .slider-switch {
+    background: #914cff;
+}
+
+.switch input:checked + .slider-switch:before {
+    transform: translateX(22px);
+}
+
+.info {
+    background: #1b1430;
+    border: 1px solid #4b327d;
+    border-radius: 9px;
+    padding: 12px;
+    color: #cbb8ec;
+    font-size: 13px;
+    margin-top: 10px;
+}
+
+.button-area {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 20px;
+}
+
+button {
+    border: none;
+    background: #914cff;
+    color: white;
+    padding: 14px 25px;
+    border-radius: 10px;
+    font-size: 15px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+button:hover {
+    background: #7b35df;
+}
+
+.result {
+    display: none;
+    background: #10251b;
+    border: 1px solid #28704b;
+    padding: 15px;
+    border-radius: 10px;
+    margin-top: 15px;
+}
+
+@media(max-width:700px) {
+
+    .grid {
+        grid-template-columns: 1fr;
+    }
+
+    .devices {
+        grid-template-columns: 1fr;
+    }
+
+    .container {
+        padding: 12px;
+    }
+
+    .section {
+        padding: 15px;
+    }
+
+    .button-area button {
+        width: 100%;
+    }
+}
+
+</style>
 </head>
 
 <body>
 
-<div class="contenedor">
-
-    <h1>TRAFFICLAB</h1>
-
-    <div class="tarjeta">
-
-        <h2>Prueba de carga</h2>
-
-        <label>
-            Número de operaciones
-        </label>
-
-        <input
-            id="cantidad"
-            type="number"
-            min="1"
-            max="100000"
-            value="100000"
-        >
-
-        <label>
-            Concurrencia máxima
-        </label>
-
-        <input
-            id="concurrencia"
-            type="number"
-            min="1"
-            max="20"
-            value="20"
-        >
-
-        <button id="boton" onclick="iniciar()">
-            INICIAR PRUEBA
-        </button>
-
-        <div class="estado" id="estado">
-            Esperando prueba...
-        </div>
-
-        <div class="barra">
-            <div class="progreso" id="progreso"></div>
-        </div>
-
-        <div class="numero" id="porcentaje">
-            0%
-        </div>
-
+<div class="header">
+    <div class="logo">
+        <span>◆</span> TRAFFICLAB
     </div>
+</div>
+
+<div class="container">
+
+<div class="title">
+    <h1>Crear proyecto</h1>
+    <p>Configura una prueba de tráfico autorizada para tu sitio web.</p>
+</div>
 
 
-    <div class="tarjeta">
+<!-- =====================================================
+     SECCIÓN 1 - GENERAL
+===================================================== -->
 
-        <h2>Resultados</h2>
+<div class="section">
 
-        <div class="resultado">
+<h2>1. General</h2>
 
-            Total:
-            <strong id="total">0</strong>
-            <br>
+<div class="section-description">
+Configuración básica del proyecto y fuente de las sesiones de prueba.
+</div>
 
-            Completadas:
-            <strong id="completadas">0</strong>
-            <br>
+<div class="grid">
 
-            Exitosas:
-            <strong id="exitosas">0</strong>
-            <br>
+<div class="field">
+<label>Título del proyecto</label>
+<input
+    id="titulo"
+    type="text"
+    placeholder="Mi proyecto"
+>
+</div>
 
-            Fallidas:
-            <strong id="fallidas">0</strong>
-            <br>
+<div class="field">
+<label>Dominio autorizado</label>
+<input
+    id="dominio"
+    type="url"
+    placeholder="https://misitio.com"
+>
+</div>
 
-            Duración:
-            <strong id="duracion">0</strong> segundos
-            <br>
+</div>
 
-            Operaciones/segundo:
-            <strong id="ops">0</strong>
+<div class="field">
 
-        </div>
+<label>Fuente de tráfico de prueba</label>
 
-    </div>
+<select id="fuente">
+
+<option value="Directo">
+Directo
+</option>
+
+<option value="Orgánico">
+Orgánico
+</option>
+
+<option value="Referido">
+Referido
+</option>
+
+<option value="Social">
+Social
+</option>
+
+</select>
+
+</div>
+
+<div class="field">
+
+<label>Palabras clave</label>
+
+<textarea
+id="palabras"
+placeholder="Una palabra clave por línea"
+></textarea>
+
+</div>
+
+<div class="info">
+
+Estas fuentes representan sesiones de prueba automatizadas.
+No se presentan como visitantes humanos reales.
+
+</div>
+
+</div>
+
+
+<!-- =====================================================
+     SECCIÓN 2 - AUDIENCIA
+===================================================== -->
+
+<div class="section">
+
+<h2>2. Audiencia</h2>
+
+<div class="section-description">
+Configura el volumen, rebote y distribución de dispositivos.
+</div>
+
+
+<div class="grid">
+
+<div class="field">
+
+<label>Sesiones de prueba por día</label>
+
+<input
+id="sesiones"
+type="number"
+value="100"
+min="1"
+max="100000"
+>
+
+</div>
+
+
+<div class="field">
+
+<label>Tasa de rebote</label>
+
+<div class="range-container">
+
+<div class="range-value">
+<span id="reboteValor">20</span>%
+</div>
+
+<input
+id="rebote"
+type="range"
+min="0"
+max="100"
+value="20"
+oninput="actualizarRebote()"
+>
+
+</div>
+
+</div>
+
+</div>
+
+
+<div class="switch-row">
+
+<div>
+
+<strong>Aumentar automáticamente el tráfico</strong>
+
+<div class="section-description">
+Aumenta gradualmente el volumen de pruebas.
+</div>
+
+</div>
+
+<label class="switch">
+
+<input
+id="aumento"
+type="checkbox"
+>
+
+<span class="slider-switch"></span>
+
+</label>
+
+</div>
+
+
+<div class="field">
+
+<label>Aumento semanal</label>
+
+<select id="aumentoSemanal">
+
+<option value="10">10%</option>
+<option value="25">25%</option>
+<option value="50">50%</option>
+<option value="100">100%</option>
+
+</select>
+
+</div>
+
+
+<h3>Dispositivos</h3>
+
+<div class="devices">
+
+<div class="device">
+
+<strong>📱 Móvil</strong>
+
+<input
+id="movil"
+type="number"
+value="60"
+min="0"
+max="100"
+>
+
+</div>
+
+<div class="device">
+
+<strong>💻 Escritorio</strong>
+
+<input
+id="escritorio"
+type="number"
+value="30"
+min="0"
+max="100"
+>
+
+</div>
+
+<div class="device">
+
+<strong>📱 Tablet</strong>
+
+<input
+id="tablet"
+type="number"
+value="10"
+min="0"
+max="100"
+>
+
+</div>
+
+</div>
+
+<div class="info">
+
+La distribución de dispositivos debe sumar exactamente 100%.
+
+</div>
+
+</div>
+
+
+<!-- =====================================================
+     SECCIÓN 3 - RECORRIDO
+===================================================== -->
+
+<div class="section">
+
+<h2>3. Recorrido del usuario</h2>
+
+<div class="section-description">
+Define cuánto tiempo permanecen las sesiones de prueba y cómo recorren las páginas autorizadas.
+</div>
+
+
+<div class="grid">
+
+<div class="field">
+
+<label>Tiempo promedio en página</label>
+
+<select id="tiempo">
+
+<option value="10">10 segundos</option>
+<option value="30">30 segundos</option>
+<option value="60">60 segundos</option>
+<option value="120" selected>120 segundos</option>
+<option value="300">300 segundos</option>
+
+</select>
+
+</div>
+
+
+<div class="field">
+
+<label>Páginas por sesión</label>
+
+<input
+id="paginas"
+type="number"
+value="3"
+min="1"
+max="20"
+>
+
+</div>
+
+</div>
+
+
+<div class="field">
+
+<label>URLs de entrada</label>
+
+<textarea
+id="urls"
+placeholder="Una URL por línea
+https://misitio.com/
+https://misitio.com/blog
+https://misitio.com/productos"
+></textarea>
+
+</div>
+
+
+<div class="switch-row">
+
+<div>
+
+<strong>Recorrido automático</strong>
+
+<div class="section-description">
+Permite seguir las páginas autorizadas configuradas.
+</div>
+
+</div>
+
+<label class="switch">
+
+<input
+id="recorrido"
+type="checkbox"
+checked
+>
+
+<span class="slider-switch"></span>
+
+</label>
+
+</div>
+
+
+<div class="switch-row">
+
+<div>
+
+<strong>Programación inteligente</strong>
+
+<div class="section-description">
+Distribuye las pruebas en el tiempo.
+</div>
+
+</div>
+
+<label class="switch">
+
+<input
+id="programacion"
+type="checkbox"
+checked
+>
+
+<span class="slider-switch"></span>
+
+</label>
+
+</div>
+
+
+<div class="switch-row">
+
+<div>
+
+<strong>Autorización</strong>
+
+<div class="section-description">
+Confirmo que tengo autorización para realizar pruebas sobre este sitio.
+</div>
+
+</div>
+
+<label class="switch">
+
+<input
+id="autorizado"
+type="checkbox"
+>
+
+<span class="slider-switch"></span>
+
+</label>
+
+</div>
+
+
+<div class="button-area">
+
+<button onclick="crearProyecto()">
+Crear proyecto
+</button>
+
+</div>
+
+<div
+id="resultado"
+class="result"
+></div>
+
+</div>
 
 </div>
 
 
 <script>
 
-let timer = null;
+function actualizarRebote() {
 
-async function iniciar() {
+    const valor =
+        document.getElementById("rebote").value;
 
-    const cantidad =
-        parseInt(document.getElementById("cantidad").value);
+    document.getElementById("reboteValor").textContent =
+        valor;
 
-    const concurrencia =
-        parseInt(document.getElementById("concurrencia").value);
-
-    if (!cantidad || cantidad < 1 || cantidad > 100000) {
-        alert("La cantidad debe estar entre 1 y 100000.");
-        return;
-    }
-
-    if (!concurrencia || concurrencia < 1 || concurrencia > 20) {
-        alert("La concurrencia debe estar entre 1 y 20.");
-        return;
-    }
-
-    const boton = document.getElementById("boton");
-
-    boton.disabled = true;
-
-    document.getElementById("estado").innerText =
-        "Ejecutando prueba...";
-
-    try {
-
-        const respuesta = await fetch("/api/iniciar", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                cantidad: cantidad,
-                concurrencia: concurrencia
-            })
-        });
-
-        const datos = await respuesta.json();
-
-        if (!respuesta.ok) {
-            alert(datos.error || "No se pudo iniciar.");
-            boton.disabled = false;
-            return;
-        }
-
-        actualizar();
-
-    } catch (error) {
-
-        alert("Error de conexión.");
-
-        boton.disabled = false;
-    }
 }
 
 
-async function actualizar() {
+async function crearProyecto() {
+
+    const movil =
+        Number(document.getElementById("movil").value);
+
+    const escritorio =
+        Number(document.getElementById("escritorio").value);
+
+    const tablet =
+        Number(document.getElementById("tablet").value);
+
+    const total =
+        movil + escritorio + tablet;
+
+
+    if (total !== 100) {
+
+        alert(
+            "Los porcentajes de dispositivos deben sumar 100%."
+        );
+
+        return;
+
+    }
+
+
+    if (
+        !document.getElementById("autorizado").checked
+    ) {
+
+        alert(
+            "Debes confirmar que tienes autorización para realizar la prueba."
+        );
+
+        return;
+
+    }
+
+
+    const datos = {
+
+        titulo:
+            document.getElementById("titulo").value,
+
+        dominio:
+            document.getElementById("dominio").value,
+
+        fuente:
+            document.getElementById("fuente").value,
+
+        palabras_clave:
+            document.getElementById("palabras").value
+                .split("\\n")
+                .map(x => x.trim())
+                .filter(Boolean),
+
+        sesiones_dia:
+            Number(
+                document.getElementById("sesiones").value
+            ),
+
+        rebote:
+            Number(
+                document.getElementById("rebote").value
+            ),
+
+        aumento_automatico:
+            document.getElementById("aumento").checked,
+
+        aumento_semanal:
+            Number(
+                document.getElementById("aumentoSemanal").value
+            ),
+
+        movil,
+        escritorio,
+        tablet,
+
+        tiempo_pagina:
+            Number(
+                document.getElementById("tiempo").value
+            ),
+
+        paginas_sesion:
+            Number(
+                document.getElementById("paginas").value
+            ),
+
+        urls_entrada:
+            document.getElementById("urls").value
+                .split("\\n")
+                .map(x => x.trim())
+                .filter(Boolean),
+
+        recorrido_automatico:
+            document.getElementById("recorrido").checked,
+
+        programacion_inteligente:
+            document.getElementById("programacion").checked,
+
+        autorizado: true
+
+    };
+
 
     try {
 
         const respuesta =
-            await fetch("/api/estado");
+            await fetch("/api/project", {
 
-        const datos =
+                method: "POST",
+
+                headers: {
+                    "Content-Type":
+                        "application/json"
+                },
+
+                body:
+                    JSON.stringify(datos)
+
+            });
+
+
+        const resultado =
             await respuesta.json();
 
-        document.getElementById("total").innerText =
-            datos.total;
 
-        document.getElementById("completadas").innerText =
-            datos.completadas;
+        const caja =
+            document.getElementById("resultado");
 
-        document.getElementById("exitosas").innerText =
-            datos.exitosas;
 
-        document.getElementById("fallidas").innerText =
-            datos.fallidas;
+        if (resultado.status === "success") {
 
-        document.getElementById("duracion").innerText =
-            datos.duracion;
+            caja.style.display = "block";
 
-        document.getElementById("ops").innerText =
-            datos.ops;
-
-        let porcentaje = 0;
-
-        if (datos.total > 0) {
-            porcentaje =
-                Math.floor(
-                    (datos.completadas / datos.total) * 100
-                );
-        }
-
-        document.getElementById("progreso").style.width =
-            porcentaje + "%";
-
-        document.getElementById("porcentaje").innerText =
-            porcentaje + "%";
-
-        if (datos.ejecutando) {
-
-            document.getElementById("estado").innerText =
-                "Prueba en ejecución...";
-
-            timer = setTimeout(actualizar, 500);
+            caja.innerHTML =
+                "✅ Proyecto creado correctamente.";
 
         } else {
 
-            document.getElementById("estado").innerText =
-                "Prueba terminada.";
+            caja.style.display = "block";
 
-            document.getElementById("boton").disabled =
-                false;
+            caja.innerHTML =
+                "❌ " +
+                (resultado.message ||
+                 "No se pudo crear el proyecto.");
+
         }
 
-    } catch (error) {
-
-        timer = setTimeout(actualizar, 1000);
     }
+
+    catch(error) {
+
+        const caja =
+            document.getElementById("resultado");
+
+        caja.style.display = "block";
+
+        caja.innerHTML =
+            "❌ Error de conexión con el servidor.";
+
+    }
+
 }
 
 </script>
@@ -357,263 +891,47 @@ async function actualizar() {
 """
 
 
-# ============================================================
-# OPERACIÓN DE PRUEBA
-# ============================================================
-
-def realizar_operacion(numero):
-    """
-    Operación interna de prueba.
-
-    No genera vistas, no visita YouTube
-    y no envía tráfico a servicios externos.
-    """
-
-    try:
-
-        # Simulación muy pequeña de trabajo.
-        resultado = (numero * 7) % 97
-
-        if resultado >= 0:
-            return True
-
-        return False
-
-    except Exception:
-        return False
-
-
-# ============================================================
-# EJECUTOR DE PRUEBA
-# ============================================================
-
-def ejecutar_prueba(cantidad, concurrencia):
-
-    global estado
-
-    inicio = time.time()
-
-    with lock:
-
-        estado["ejecutando"] = True
-        estado["total"] = cantidad
-        estado["completadas"] = 0
-        estado["exitosas"] = 0
-        estado["fallidas"] = 0
-        estado["inicio"] = inicio
-        estado["fin"] = None
-        estado["duracion"] = 0
-
-    try:
-
-        with ThreadPoolExecutor(
-            max_workers=concurrencia
-        ) as executor:
-
-            trabajos = [
-                executor.submit(
-                    realizar_operacion,
-                    numero
-                )
-                for numero in range(cantidad)
-            ]
-
-            for futuro in as_completed(trabajos):
-
-                try:
-
-                    resultado = futuro.result()
-
-                    with lock:
-
-                        estado["completadas"] += 1
-
-                        if resultado:
-                            estado["exitosas"] += 1
-                        else:
-                            estado["fallidas"] += 1
-
-                except Exception:
-
-                    with lock:
-                        estado["completadas"] += 1
-                        estado["fallidas"] += 1
-
-    finally:
-
-        fin = time.time()
-
-        with lock:
-
-            estado["ejecutando"] = False
-            estado["fin"] = fin
-            estado["duracion"] = round(
-                fin - inicio,
-                2
-            )
-
-
-# ============================================================
-# RUTA PRINCIPAL
-# ============================================================
-
-@app.route("/")
-def inicio():
-
+@app.route("/", methods=["GET"])
+def index():
     return render_template_string(HTML)
 
 
-# ============================================================
-# HEALTH CHECK
-# ============================================================
-
-@app.route("/health")
-def health():
+@app.route("/health", methods=["GET"])
+def health_check():
 
     return jsonify({
-        "status": "ok",
-        "servicio": "TRAFFICLAB"
+        "status": "healthy"
     })
 
 
-# ============================================================
-# INICIAR PRUEBA
-# ============================================================
+@app.route("/api/project", methods=["POST"])
+def create_project():
 
-@app.route("/api/iniciar", methods=["POST"])
-def iniciar_prueba():
+    global configuracion
 
-    with lock:
+    data = request.get_json() or {}
 
-        if estado["ejecutando"]:
-
-            return jsonify({
-                "error": "Ya existe una prueba ejecutándose."
-            }), 409
-
-    datos = request.get_json(silent=True) or {}
-
-    try:
-
-        cantidad = int(
-            datos.get(
-                "cantidad",
-                MAX_OPERACIONES
-            )
-        )
-
-        concurrencia = int(
-            datos.get(
-                "concurrencia",
-                MAX_CONCURRENCIA
-            )
-        )
-
-    except (ValueError, TypeError):
-
-        return jsonify({
-            "error": "Valores inválidos."
-        }), 400
-
-    if cantidad < 1 or cantidad > MAX_OPERACIONES:
-
-        return jsonify({
-            "error":
-            f"La cantidad máxima es {MAX_OPERACIONES}."
-        }), 400
-
-    if concurrencia < 1 or concurrencia > MAX_CONCURRENCIA:
-
-        return jsonify({
-            "error":
-            f"La concurrencia máxima es {MAX_CONCURRENCIA}."
-        }), 400
-
-    hilo = threading.Thread(
-        target=ejecutar_prueba,
-        args=(cantidad, concurrencia),
-        daemon=True
-    )
-
-    hilo.start()
+    configuracion.update(data)
 
     return jsonify({
-        "ok": True,
-        "mensaje": "Prueba iniciada.",
-        "cantidad": cantidad,
-        "concurrencia": concurrencia
-    })
+        "status": "success",
+        "message": "Proyecto creado correctamente.",
+        "project": configuracion
+    }), 200
 
 
-# ============================================================
-# ESTADO
-# ============================================================
-
-@app.route("/api/estado")
-def obtener_estado():
-
-    with lock:
-
-        datos = dict(estado)
-
-    duracion = datos["duracion"]
-
-    if datos["ejecutando"] and datos["inicio"]:
-
-        duracion = time.time() - datos["inicio"]
-
-    duracion = round(duracion, 2)
-
-    if duracion > 0:
-
-        ops = round(
-            datos["completadas"] / duracion,
-            2
-        )
-
-    else:
-
-        ops = 0
-
-    datos["duracion"] = duracion
-    datos["ops"] = ops
-
-    return jsonify(datos)
-
-
-# ============================================================
-# INFORMACIÓN
-# ============================================================
-
-@app.route("/api/info")
-def info():
+@app.route("/api/project", methods=["GET"])
+def get_project():
 
     return jsonify({
-        "nombre": "TRAFFICLAB",
-        "version": "1.0",
-        "tipo": "Prueba de carga interna",
-        "max_operaciones": MAX_OPERACIONES,
-        "max_concurrencia": MAX_CONCURRENCIA,
-        "estado": estado["ejecutando"]
-    })
+        "status": "success",
+        "project": configuracion
+    }), 200
 
-
-# ============================================================
-# ARRANQUE
-# ============================================================
 
 if __name__ == "__main__":
 
-    puerto = int(
-        os.environ.get(
-            "PORT",
-            8080
-        )
-    )
-
     app.run(
         host="0.0.0.0",
-        port=puerto,
-        threaded=True
-    )
-```
+        port=PORT
+    ) 
