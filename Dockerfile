@@ -6,11 +6,14 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copiar el código fuente
+# Copiar el código de la aplicación
 COPY main.py .
 
-# Exponer el puerto por defecto
+# Copiar el motor de pruebas Locust
+COPY locustfile.py .
+
+# Exponer el puerto
 EXPOSE 8080
 
-# Comando único de ejecución
+# Ejecutar TrafficLab
 CMD ["gunicorn", "--bind", "0.0.0.0:8080", "main:app"]
