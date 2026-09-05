@@ -1,11 +1,23 @@
 import os
+import threading
+import time
+from urllib.parse import urlparse
+
 from flask import Flask, jsonify, request, render_template_string
+
+from locust.env import Environment
+from locust.stats import stats_history
+from locustfile import TrafficLabUser
+
 
 app = Flask(__name__)
 
 PORT = int(os.environ.get("PORT", 8080))
 
-# Estado temporal de la configuración
+# ============================================================
+# CONFIGURACIÓN
+# ============================================================
+
 configuracion = {
     "titulo": "",
     "dominio": "",
@@ -27,12 +39,136 @@ configuracion = {
     "autorizado": False
 }
 
+# ============================================================
+# ESTADO DEL MOTOR DE PRUEBAS
+# ============================================================
+
+motor = {
+    "environment": None,
+    "runner": None,
+    "activo": False,
+    "inicio": None,
+    "error": None,
+    "objetivo": "",
+    "usuarios": 0
+}
+
+motor_lock = threading.Lock()
+
+
+# ============================================================
+# FUNCIONES AUXILIARES
+# ============================================================
+
+def validar_dominio(url):
+    """
+    Comprueba que exista una URL HTTP/HTTPS válida.
+    """
+
+    if not url:
+        return None
+
+    url = url.strip()
+
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+
+    try:
+        parsed = urlparse(url)
+
+        if parsed.scheme not in ("http", "https"):
+            return None
+
+        if not parsed.netloc:
+            return None
+
+        return url.rstrip("/")
+
+    except Exception:
+        return None
+
+
+def ejecutar_prueba(host, usuarios, velocidad):
+    """
+    Ejecuta Locust en segundo plano.
+    Solo debe utilizarse contra sitios propios o autorizados.
+    """
+
+    global motor
+
+    try:
+
+        environment = Environment(
+            user_classes=[TrafficLabUser],
+            host=host
+        )
+
+        runner = environment.create_local_runner()
+
+        with motor_lock:
+            motor["environment"] = environment
+            motor["runner"] = runner
+            motor["activo"] = True
+            motor["inicio"] = time.time()
+            motor["error"] = None
+            motor["objetivo"] = host
+            motor["usuarios"] = usuarios
+
+        # Iniciar usuarios
+        runner.start(
+            user_count=usuarios,
+            spawn_rate=velocidad
+        )
+
+        # Mantener el motor funcionando
+        while True:
+
+            with motor_lock:
+                activo = motor["activo"]
+
+            if not activo:
+                break
+
+            if runner.state == "stopped":
+                break
+
+            time.sleep(1)
+
+    except Exception as error:
+
+        with motor_lock:
+            motor["error"] = str(error)
+
+    finally:
+
+        try:
+            if runner:
+                runner.quit()
+        except Exception:
+            pass
+
+        with motor_lock:
+            motor["activo"] = False
+            motor["runner"] = None
+            motor["environment"] = None
+
+
+# ============================================================
+# HTML
+# ============================================================
+
 HTML = """
 <!DOCTYPE html>
 <html lang="es">
+
 <head>
+
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+>
 
 <title>TrafficLab</title>
 
@@ -238,6 +374,7 @@ input[type="range"] {
 
 .button-area {
     display: flex;
+    gap: 10px;
     justify-content: flex-end;
     margin-top: 20px;
 }
@@ -257,6 +394,19 @@ button:hover {
     background: #7b35df;
 }
 
+button.stop {
+    background: #a93232;
+}
+
+button.stop:hover {
+    background: #c83b3b;
+}
+
+button:disabled {
+    opacity: .5;
+    cursor: not-allowed;
+}
+
 .result {
     display: none;
     background: #10251b;
@@ -264,6 +414,49 @@ button:hover {
     padding: 15px;
     border-radius: 10px;
     margin-top: 15px;
+}
+
+.status {
+    background: #211a31;
+    border: 1px solid #3a304d;
+    border-radius: 10px;
+    padding: 15px;
+    margin-top: 15px;
+}
+
+.status-title {
+    font-weight: bold;
+    margin-bottom: 10px;
+}
+
+.status-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+}
+
+.stat {
+    background: #151120;
+    border-radius: 8px;
+    padding: 12px;
+}
+
+.stat small {
+    display: block;
+    color: #9992aa;
+    margin-bottom: 5px;
+}
+
+.stat strong {
+    font-size: 20px;
+}
+
+.running {
+    color: #55df91;
+}
+
+.stopped {
+    color: #ff8c8c;
 }
 
 @media(max-width:700px) {
@@ -276,6 +469,10 @@ button:hover {
         grid-template-columns: 1fr;
     }
 
+    .status-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+
     .container {
         padding: 12px;
     }
@@ -284,63 +481,83 @@ button:hover {
         padding: 15px;
     }
 
+    .button-area {
+        flex-direction: column;
+    }
+
     .button-area button {
         width: 100%;
     }
 }
 
 </style>
+
 </head>
 
 <body>
 
 <div class="header">
+
     <div class="logo">
         <span>◆</span> TRAFFICLAB
     </div>
+
 </div>
 
 <div class="container">
 
 <div class="title">
+
     <h1>Crear proyecto</h1>
-    <p>Configura una prueba de tráfico autorizada para tu sitio web.</p>
+
+    <p>
+        Configura una prueba de tráfico autorizada para tu sitio web.
+    </p>
+
 </div>
 
 
-<!-- =====================================================
-     SECCIÓN 1 - GENERAL
-===================================================== -->
+<!-- ======================================================
+     GENERAL
+====================================================== -->
 
 <div class="section">
 
 <h2>1. General</h2>
 
 <div class="section-description">
-Configuración básica del proyecto y fuente de las sesiones de prueba.
+Configuración básica del proyecto y destino de la prueba.
 </div>
 
 <div class="grid">
 
 <div class="field">
+
 <label>Título del proyecto</label>
+
 <input
     id="titulo"
     type="text"
     placeholder="Mi proyecto"
 >
+
 </div>
 
+
 <div class="field">
+
 <label>Dominio autorizado</label>
+
 <input
     id="dominio"
     type="url"
     placeholder="https://misitio.com"
 >
+
 </div>
 
 </div>
+
 
 <div class="field">
 
@@ -348,57 +565,49 @@ Configuración básica del proyecto y fuente de las sesiones de prueba.
 
 <select id="fuente">
 
-<option value="Directo">
-Directo
-</option>
-
-<option value="Orgánico">
-Orgánico
-</option>
-
-<option value="Referido">
-Referido
-</option>
-
-<option value="Social">
-Social
-</option>
+<option value="Directo">Directo</option>
+<option value="Orgánico">Orgánico</option>
+<option value="Referido">Referido</option>
+<option value="Social">Social</option>
 
 </select>
 
 </div>
+
 
 <div class="field">
 
 <label>Palabras clave</label>
 
 <textarea
-id="palabras"
-placeholder="Una palabra clave por línea"
+    id="palabras"
+    placeholder="Una palabra clave por línea"
 ></textarea>
 
 </div>
 
+
 <div class="info">
 
-Estas fuentes representan sesiones de prueba automatizadas.
-No se presentan como visitantes humanos reales.
+Estas sesiones son pruebas automatizadas.
+No representan visitantes humanos reales ni sirven para fabricar
+métricas de plataformas externas.
 
 </div>
 
 </div>
 
 
-<!-- =====================================================
-     SECCIÓN 2 - AUDIENCIA
-===================================================== -->
+<!-- ======================================================
+     AUDIENCIA
+====================================================== -->
 
 <div class="section">
 
 <h2>2. Audiencia</h2>
 
 <div class="section-description">
-Configura el volumen, rebote y distribución de dispositivos.
+Configura el volumen de usuarios de prueba.
 </div>
 
 
@@ -406,14 +615,14 @@ Configura el volumen, rebote y distribución de dispositivos.
 
 <div class="field">
 
-<label>Sesiones de prueba por día</label>
+<label>Usuarios simultáneos</label>
 
 <input
-id="sesiones"
-type="number"
-value="100"
-min="1"
-max="100000"
+    id="sesiones"
+    type="number"
+    value="5"
+    min="1"
+    max="100"
 >
 
 </div>
@@ -430,12 +639,12 @@ max="100000"
 </div>
 
 <input
-id="rebote"
-type="range"
-min="0"
-max="100"
-value="20"
-oninput="actualizarRebote()"
+    id="rebote"
+    type="range"
+    min="0"
+    max="100"
+    value="20"
+    oninput="actualizarRebote()"
 >
 
 </div>
@@ -460,8 +669,8 @@ Aumenta gradualmente el volumen de pruebas.
 <label class="switch">
 
 <input
-id="aumento"
-type="checkbox"
+    id="aumento"
+    type="checkbox"
 >
 
 <span class="slider-switch"></span>
@@ -496,44 +705,47 @@ type="checkbox"
 <strong>📱 Móvil</strong>
 
 <input
-id="movil"
-type="number"
-value="60"
-min="0"
-max="100"
+    id="movil"
+    type="number"
+    value="60"
+    min="0"
+    max="100"
 >
 
 </div>
+
 
 <div class="device">
 
 <strong>💻 Escritorio</strong>
 
 <input
-id="escritorio"
-type="number"
-value="30"
-min="0"
-max="100"
+    id="escritorio"
+    type="number"
+    value="30"
+    min="0"
+    max="100"
 >
 
 </div>
+
 
 <div class="device">
 
 <strong>📱 Tablet</strong>
 
 <input
-id="tablet"
-type="number"
-value="10"
-min="0"
-max="100"
+    id="tablet"
+    type="number"
+    value="10"
+    min="0"
+    max="100"
 >
 
 </div>
 
 </div>
+
 
 <div class="info">
 
@@ -544,16 +756,16 @@ La distribución de dispositivos debe sumar exactamente 100%.
 </div>
 
 
-<!-- =====================================================
-     SECCIÓN 3 - RECORRIDO
-===================================================== -->
+<!-- ======================================================
+     RECORRIDO
+====================================================== -->
 
 <div class="section">
 
 <h2>3. Recorrido del usuario</h2>
 
 <div class="section-description">
-Define cuánto tiempo permanecen las sesiones de prueba y cómo recorren las páginas autorizadas.
+Configura las páginas que deben utilizarse durante la prueba.
 </div>
 
 
@@ -581,11 +793,11 @@ Define cuánto tiempo permanecen las sesiones de prueba y cómo recorren las pá
 <label>Páginas por sesión</label>
 
 <input
-id="paginas"
-type="number"
-value="3"
-min="1"
-max="20"
+    id="paginas"
+    type="number"
+    value="3"
+    min="1"
+    max="20"
 >
 
 </div>
@@ -598,8 +810,8 @@ max="20"
 <label>URLs de entrada</label>
 
 <textarea
-id="urls"
-placeholder="Una URL por línea
+    id="urls"
+    placeholder="Una URL por línea
 https://misitio.com/
 https://misitio.com/blog
 https://misitio.com/productos"
@@ -615,7 +827,7 @@ https://misitio.com/productos"
 <strong>Recorrido automático</strong>
 
 <div class="section-description">
-Permite seguir las páginas autorizadas configuradas.
+Permite utilizar las páginas configuradas.
 </div>
 
 </div>
@@ -623,9 +835,9 @@ Permite seguir las páginas autorizadas configuradas.
 <label class="switch">
 
 <input
-id="recorrido"
-type="checkbox"
-checked
+    id="recorrido"
+    type="checkbox"
+    checked
 >
 
 <span class="slider-switch"></span>
@@ -650,9 +862,9 @@ Distribuye las pruebas en el tiempo.
 <label class="switch">
 
 <input
-id="programacion"
-type="checkbox"
-checked
+    id="programacion"
+    type="checkbox"
+    checked
 >
 
 <span class="slider-switch"></span>
@@ -677,8 +889,8 @@ Confirmo que tengo autorización para realizar pruebas sobre este sitio.
 <label class="switch">
 
 <input
-id="autorizado"
-type="checkbox"
+    id="autorizado"
+    type="checkbox"
 >
 
 <span class="slider-switch"></span>
@@ -691,15 +903,85 @@ type="checkbox"
 <div class="button-area">
 
 <button onclick="crearProyecto()">
-Crear proyecto
+Guardar proyecto
+</button>
+
+<button onclick="iniciarPrueba()">
+▶ Iniciar prueba
+</button>
+
+<button
+    id="detener"
+    class="stop"
+    onclick="detenerPrueba()"
+    disabled
+>
+■ Detener
 </button>
 
 </div>
 
+
 <div
-id="resultado"
-class="result"
+    id="resultado"
+    class="result"
 ></div>
+
+
+<div class="status">
+
+<div class="status-title">
+Estado de TrafficLab
+</div>
+
+<div class="status-grid">
+
+<div class="stat">
+
+<small>Estado</small>
+
+<strong id="estado">
+Detenido
+</strong>
+
+</div>
+
+
+<div class="stat">
+
+<small>Usuarios</small>
+
+<strong id="usuarios">
+0
+</strong>
+
+</div>
+
+
+<div class="stat">
+
+<small>Peticiones</small>
+
+<strong id="peticiones">
+0
+</strong>
+
+</div>
+
+
+<div class="stat">
+
+<small>Errores</small>
+
+<strong id="errores">
+0
+</strong>
+
+</div>
+
+</div>
+
+</div>
 
 </div>
 
@@ -719,7 +1001,7 @@ function actualizarRebote() {
 }
 
 
-async function crearProyecto() {
+function obtenerDatos() {
 
     const movil =
         Number(document.getElementById("movil").value);
@@ -740,25 +1022,27 @@ async function crearProyecto() {
             "Los porcentajes de dispositivos deben sumar 100%."
         );
 
-        return;
+        return null;
 
     }
 
 
-    if (
-        !document.getElementById("autorizado").checked
-    ) {
+    const autorizado =
+        document.getElementById("autorizado").checked;
+
+
+    if (!autorizado) {
 
         alert(
             "Debes confirmar que tienes autorización para realizar la prueba."
         );
 
-        return;
+        return null;
 
     }
 
 
-    const datos = {
+    return {
 
         titulo:
             document.getElementById("titulo").value,
@@ -823,6 +1107,17 @@ async function crearProyecto() {
 
     };
 
+}
+
+
+async function crearProyecto() {
+
+    const datos = obtenerDatos();
+
+    if (!datos) {
+        return;
+    }
+
 
     try {
 
@@ -832,8 +1127,7 @@ async function crearProyecto() {
                 method: "POST",
 
                 headers: {
-                    "Content-Type":
-                        "application/json"
+                    "Content-Type": "application/json"
                 },
 
                 body:
@@ -846,55 +1140,276 @@ async function crearProyecto() {
             await respuesta.json();
 
 
-        const caja =
-            document.getElementById("resultado");
-
-
-        if (resultado.status === "success") {
-
-            caja.style.display = "block";
-
-            caja.innerHTML =
-                "✅ Proyecto creado correctamente.";
-
-        } else {
-
-            caja.style.display = "block";
-
-            caja.innerHTML =
-                "❌ " +
-                (resultado.message ||
-                 "No se pudo crear el proyecto.");
-
-        }
+        mostrarResultado(
+            resultado.status === "success",
+            resultado.message
+        );
 
     }
 
     catch(error) {
 
-        const caja =
-            document.getElementById("resultado");
-
-        caja.style.display = "block";
-
-        caja.innerHTML =
-            "❌ Error de conexión con el servidor.";
+        mostrarResultado(
+            false,
+            "Error de conexión con el servidor."
+        );
 
     }
 
 }
 
+
+async function iniciarPrueba() {
+
+    const datos = obtenerDatos();
+
+    if (!datos) {
+        return;
+    }
+
+
+    try {
+
+        const guardar =
+            await fetch("/api/project", {
+
+                method: "POST",
+
+                headers: {
+                    "Content-Type": "application/json"
+                },
+
+                body:
+                    JSON.stringify(datos)
+
+            });
+
+
+        const resultadoGuardar =
+            await guardar.json();
+
+
+        if (resultadoGuardar.status !== "success") {
+
+            mostrarResultado(
+                false,
+                resultadoGuardar.message
+            );
+
+            return;
+
+        }
+
+
+        const respuesta =
+            await fetch("/api/test/start", {
+
+                method: "POST",
+
+                headers: {
+                    "Content-Type": "application/json"
+                },
+
+                body: JSON.stringify({
+
+                    usuarios:
+                        Number(
+                            document.getElementById("sesiones").value
+                        ),
+
+                    velocidad: 1
+
+                })
+
+            });
+
+
+        const resultado =
+            await respuesta.json();
+
+
+        mostrarResultado(
+            resultado.status === "success",
+            resultado.message
+        );
+
+
+        actualizarEstado();
+
+    }
+
+    catch(error) {
+
+        mostrarResultado(
+            false,
+            "No se pudo iniciar la prueba."
+        );
+
+    }
+
+}
+
+
+async function detenerPrueba() {
+
+    try {
+
+        const respuesta =
+            await fetch("/api/test/stop", {
+
+                method: "POST"
+
+            });
+
+
+        const resultado =
+            await respuesta.json();
+
+
+        mostrarResultado(
+            resultado.status === "success",
+            resultado.message
+        );
+
+
+        actualizarEstado();
+
+    }
+
+    catch(error) {
+
+        mostrarResultado(
+            false,
+            "No se pudo detener la prueba."
+        );
+
+    }
+
+}
+
+
+async function actualizarEstado() {
+
+    try {
+
+        const respuesta =
+            await fetch("/api/test/status");
+
+
+        const datos =
+            await respuesta.json();
+
+
+        const estado =
+            document.getElementById("estado");
+
+        const usuarios =
+            document.getElementById("usuarios");
+
+        const peticiones =
+            document.getElementById("peticiones");
+
+        const errores =
+            document.getElementById("errores");
+
+        const detener =
+            document.getElementById("detener");
+
+
+        if (datos.activo) {
+
+            estado.textContent = "Ejecutando";
+
+            estado.className = "running";
+
+            detener.disabled = false;
+
+        } else {
+
+            estado.textContent = "Detenido";
+
+            estado.className = "stopped";
+
+            detener.disabled = true;
+
+        }
+
+
+        usuarios.textContent =
+            datos.usuarios || 0;
+
+
+        peticiones.textContent =
+            datos.peticiones || 0;
+
+
+        errores.textContent =
+            datos.errores || 0;
+
+    }
+
+    catch(error) {
+
+        console.log(error);
+
+    }
+
+}
+
+
+function mostrarResultado(exito, mensaje) {
+
+    const caja =
+        document.getElementById("resultado");
+
+
+    caja.style.display = "block";
+
+
+    if (exito) {
+
+        caja.innerHTML =
+            "✅ " + (mensaje || "Operación realizada correctamente.");
+
+    } else {
+
+        caja.innerHTML =
+            "❌ " + (mensaje || "Ocurrió un error.");
+
+    }
+
+}
+
+
+setInterval(
+    actualizarEstado,
+    2000
+);
+
+
+actualizarEstado();
+
 </script>
 
 </body>
+
 </html>
 """
 
 
+# ============================================================
+# RUTA PRINCIPAL
+# ============================================================
+
 @app.route("/", methods=["GET"])
 def index():
+
     return render_template_string(HTML)
 
+
+# ============================================================
+# HEALTH CHECK
+# ============================================================
 
 @app.route("/health", methods=["GET"])
 def health_check():
@@ -904,6 +1419,10 @@ def health_check():
     })
 
 
+# ============================================================
+# CREAR / GUARDAR PROYECTO
+# ============================================================
+
 @app.route("/api/project", methods=["POST"])
 def create_project():
 
@@ -911,27 +1430,295 @@ def create_project():
 
     data = request.get_json() or {}
 
+    dominio = validar_dominio(
+        data.get("dominio", "")
+    )
+
+    if not dominio:
+
+        return jsonify({
+            "status": "error",
+            "message": "El dominio no es válido."
+        }), 400
+
+
+    if not data.get("autorizado"):
+
+        return jsonify({
+            "status": "error",
+            "message": "Debes confirmar la autorización."
+        }), 400
+
+
+    data["dominio"] = dominio
+
     configuracion.update(data)
 
+
     return jsonify({
+
         "status": "success",
-        "message": "Proyecto creado correctamente.",
-        "project": configuracion
+
+        "message":
+            "Proyecto guardado correctamente.",
+
+        "project":
+            configuracion
+
     }), 200
 
+
+# ============================================================
+# OBTENER PROYECTO
+# ============================================================
 
 @app.route("/api/project", methods=["GET"])
 def get_project():
 
     return jsonify({
+
         "status": "success",
-        "project": configuracion
+
+        "project":
+            configuracion
+
     }), 200
 
+
+# ============================================================
+# INICIAR LOCUST
+# ============================================================
+
+@app.route("/api/test/start", methods=["POST"])
+def start_test():
+
+    global motor
+
+    data = request.get_json() or {}
+
+    with motor_lock:
+
+        if motor["activo"]:
+
+            return jsonify({
+
+                "status": "error",
+
+                "message":
+                    "Ya existe una prueba ejecutándose."
+
+            }), 400
+
+
+    if not configuracion.get("autorizado"):
+
+        return jsonify({
+
+            "status": "error",
+
+            "message":
+                "Debes confirmar la autorización."
+
+        }), 403
+
+
+    host = validar_dominio(
+        configuracion.get("dominio", "")
+    )
+
+
+    if not host:
+
+        return jsonify({
+
+            "status": "error",
+
+            "message":
+                "Configura primero un dominio válido."
+
+        }), 400
+
+
+    usuarios = int(
+        data.get(
+            "usuarios",
+            configuracion.get("sesiones_dia", 5)
+        )
+    )
+
+
+    velocidad = int(
+        data.get(
+            "velocidad",
+            1
+        )
+    )
+
+
+    # Límite prudente para esta versión gratuita.
+    usuarios = max(1, min(usuarios, 100))
+
+    velocidad = max(1, min(velocidad, usuarios))
+
+
+    hilo = threading.Thread(
+
+        target=ejecutar_prueba,
+
+        args=(
+            host,
+            usuarios,
+            velocidad
+        ),
+
+        daemon=True
+
+    )
+
+    hilo.start()
+
+
+    return jsonify({
+
+        "status": "success",
+
+        "message":
+            "Prueba iniciada correctamente.",
+
+        "objetivo":
+            host,
+
+        "usuarios":
+            usuarios
+
+    }), 200
+
+
+# ============================================================
+# DETENER PRUEBA
+# ============================================================
+
+@app.route("/api/test/stop", methods=["POST"])
+def stop_test():
+
+    with motor_lock:
+
+        runner = motor.get("runner")
+
+        activo = motor.get("activo")
+
+
+    if not activo or runner is None:
+
+        return jsonify({
+
+            "status": "error",
+
+            "message":
+                "No hay ninguna prueba ejecutándose."
+
+        }), 400
+
+
+    try:
+
+        runner.quit()
+
+    except Exception:
+        pass
+
+
+    with motor_lock:
+
+        motor["activo"] = False
+
+
+    return jsonify({
+
+        "status": "success",
+
+        "message":
+            "Prueba detenida."
+
+    }), 200
+
+
+# ============================================================
+# ESTADO DE LA PRUEBA
+# ============================================================
+
+@app.route("/api/test/status", methods=["GET"])
+def test_status():
+
+    with motor_lock:
+
+        environment = motor.get("environment")
+
+        activo = motor.get("activo")
+
+        objetivo = motor.get("objetivo")
+
+        inicio = motor.get("inicio")
+
+        error = motor.get("error")
+
+
+    peticiones = 0
+    errores = 0
+    usuarios = 0
+
+
+    if environment is not None:
+
+        try:
+
+            total = environment.stats.total
+
+            peticiones = total.num_requests
+
+            errores = total.num_failures
+
+            usuarios = (
+                environment.runner.user_count
+                if environment.runner
+                else 0
+            )
+
+        except Exception:
+            pass
+
+
+    return jsonify({
+
+        "status": "success",
+
+        "activo": activo,
+
+        "objetivo": objetivo,
+
+        "inicio": inicio,
+
+        "usuarios": usuarios,
+
+        "peticiones": peticiones,
+
+        "errores": errores,
+
+        "error": error
+
+    }), 200
+
+
+# ============================================================
+# EJECUCIÓN DIRECTA
+# ============================================================
 
 if __name__ == "__main__":
 
     app.run(
+
         host="0.0.0.0",
+
         port=PORT
-    ) 
+
+    )
